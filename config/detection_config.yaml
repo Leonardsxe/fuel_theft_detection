@@ -1,0 +1,77 @@
+# Detection thresholds and pattern definitions for fuel theft detection
+
+# Stationary period detection
+stationary:
+  speed_threshold_kmh: 1.0  # Speed below this = stationary
+  gap_limit_on_min: 5.0     # Max time gap for stationary_on segments
+  gap_limit_off_min: 120.0  # Max time gap for ignition_off segments
+  min_segment_duration_min: 3.0  # Minimum segment length to consider
+
+# Adaptive noise thresholds (minimum values)
+thresholds:
+  stationary_on:
+    min_step_gal: 1.0       # Minimum single-step threshold
+    min_cumulative_gal: 3.5 # Minimum cumulative threshold
+    mad_multiplier_step: 3.0  # MAD multiplier for step threshold
+    mad_multiplier_cum: 4.0   # MAD multiplier for cumulative threshold
+  
+  ignition_off:
+    min_step_gal: 1.5
+    min_cumulative_gal: 6.0
+    mad_multiplier_step: 2.5
+    mad_multiplier_cum: 3.5
+
+# Detection patterns
+patterns:
+  short_drain:
+    name: "short_4_10m_3gal"
+    min_duration_min: 4.0
+    max_duration_min: 10.0
+    min_negative_steps: 2
+    description: "Quick drains during stationary periods"
+  
+  extended_drain:
+    name: "extended_15m_6gal"
+    min_duration_min: 15.0
+    max_duration_min: null  # No upper limit
+    min_cumulative_gal: 6.0
+    description: "Prolonged drains during stationary periods"
+  
+  postjourney_off:
+    name: "postjourney_off"
+    min_duration_min: 45.0
+    max_duration_min: null
+    min_points: 2
+    min_median_dt_s: 1800.0  # 30 minutes
+    min_cumulative_gal: 6.0
+    description: "Post-journey drains with ignition off"
+
+# Plausibility filters
+plausibility:
+  max_rate_gpm: 2.0        # Maximum plausible drain rate (gal/min)
+  max_step_gal: 50.0       # Maximum single-step drop
+  max_fill_rate_gpm: 10.0  # Maximum plausible refueling rate
+
+# Noise filtering
+noise:
+  min_noise_dfuel: -0.10   # Ignore tiny fuel jitter above this threshold
+
+# Non-maximum suppression
+nms:
+  iou_threshold: 0.5       # Temporal IoU threshold for overlapping events
+
+# Hotspot clustering (DBSCAN)
+clustering:
+  eps_meters: 60.0         # Maximum distance for cluster membership
+  min_samples: 12          # Minimum points to form a cluster
+  earth_radius_m: 6371000  # Earth radius in meters for haversine
+
+# Outlier detection
+outliers:
+  max_drain_rate_gpm: 2.0  # Flag rates exceeding this
+  max_fill_rate_gpm: 10.0  # Flag fill rates exceeding this
+  mad_threshold: 5.0       # MAD-based outlier threshold (5-sigma)
+  
+# Gap interpolation
+interpolation:
+  max_gap_points: 3        # Maximum gap size to interpolate within stationary segments

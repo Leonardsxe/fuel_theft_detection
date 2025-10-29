@@ -1,0 +1,141 @@
+# config/model_config.yaml
+# Machine learning model hyperparameters and training configuration
+
+# Feature engineering
+features:
+  behavioral_lookback_hours: 2  # Hours to look back for pre-event context
+  enable_vehicle_normalization: true
+  enable_behavioral_features: true
+  enable_temporal_features: true
+  enable_spatial_features: true
+
+# Train/test split
+splitting:
+  train_ratio: 0.80  # 80% train, 20% test
+  strategy: "temporal"  # Time-aware split per vehicle
+  random_seed: 42
+
+# Feature preprocessing
+preprocessing:
+  imputation_strategy: "constant"  # Strategy for missing values
+  imputation_fill_value: 0
+  scaler: "standard"  # standard, minmax, or robust
+  handle_unknown_categories: "ignore"
+
+# Random Forest (baseline model)
+random_forest:
+  n_estimators: 200
+  max_depth: 10
+  min_samples_split: 20
+  min_samples_leaf: 10
+  max_features: "sqrt"
+  class_weight: "balanced_subsample"
+  random_state: 42
+  n_jobs: -1
+  
+  # Calibration
+  calibration_method: "sigmoid"  # sigmoid or isotonic
+  calibration_cv: 5
+
+# Logistic Regression (baseline model)
+logistic_regression:
+  max_iter: 1000
+  solver: "lbfgs"
+  C: 0.1  # Inverse regularization strength
+  class_weight: "balanced"
+  random_state: 42
+  
+  # Calibration
+  calibration_method: "sigmoid"
+  calibration_cv: 5
+
+# Isolation Forest (anomaly detection)
+isolation_forest:
+  n_estimators: 200
+  contamination: 0.1  # Expected proportion of outliers
+  random_state: 42
+  n_jobs: -1
+
+# XGBoost (gradient boosting)
+xgboost:
+  # Best hyperparameters from tuning (for pattern-specific models)
+  extended_pattern:
+    n_estimators: 385
+    max_depth: 8
+    learning_rate: 0.137
+    subsample: 0.8
+    colsample_bytree: 0.8
+    min_child_weight: 5
+    gamma: 0.2
+    reg_alpha: 0.5
+    reg_lambda: 0.8
+    
+  short_pattern:
+    n_estimators: 300
+    max_depth: 6
+    learning_rate: 0.05
+    subsample: 0.7
+    colsample_bytree: 0.7
+    min_child_weight: 3
+    gamma: 0.1
+    reg_alpha: 0.3
+    reg_lambda: 0.5
+  
+  # General config
+  eval_metric: "aucpr"
+  random_state: 42
+  tree_method: "hist"  # Fast histogram-based method
+
+# LightGBM (gradient boosting)
+lightgbm:
+  n_estimators: 154
+  max_depth: 8
+  num_leaves: 83
+  learning_rate: 0.1
+  subsample: 0.8
+  colsample_bytree: 0.8
+  min_child_samples: 10
+  reg_alpha: 0.5
+  reg_lambda: 0.5
+  class_weight: "balanced"
+  random_state: 42
+  verbose: -1
+
+# Hyperparameter tuning
+tuning:
+  method: "random_search"  # random_search or grid_search
+  n_iter: 20  # Number of parameter settings sampled
+  cv: 3  # Cross-validation folds
+  scoring: "average_precision"  # PR-AUC
+  n_jobs: -1
+  verbose: 1
+
+# Pattern-specific models
+pattern_models:
+  postjourney_off:
+    model_type: "random_forest"  # Use RF baseline for this pattern
+    target_fpr: 0.10  # 10% FPR target
+    
+  extended_15m_6gal:
+    model_type: "xgboost"
+    target_fpr: 0.05  # 5% FPR target
+    
+  short_4_10m_3gal:
+    model_type: "xgboost"
+    target_fpr: 0.03  # 3% FPR target (conservative)
+
+# Evaluation metrics
+evaluation:
+  target_fpr: 0.05  # Overall target FPR for threshold selection
+  metrics:
+    - "pr_auc"
+    - "precision"
+    - "recall"
+    - "f1_score"
+    - "roc_auc"
+  
+  # Generate evaluation artifacts
+  save_pr_curves: true
+  save_confusion_matrices: true
+  save_feature_importance: true
+  save_top_predictions: 100  # Save top N predictions for review

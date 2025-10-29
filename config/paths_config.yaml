@@ -1,0 +1,120 @@
+# config/paths_config.yaml
+# File paths and directory structure
+
+# Data directories
+data:
+  raw: "data/raw"
+  processed: "data/processed"
+  events: "data/events"
+  models: "data/models"
+  reports: "data/reports"
+
+# Input files
+input:
+  # Combined dataset (output of preprocessing)
+  combined_csv: "data/processed/combined_dataset.csv"
+  
+  # Raw source files (if combining multiple CSVs)
+  raw_sources:
+    - "data/raw/WOL991_2024_Nov.csv"
+    - "data/raw/WOL991_2024_Dec.csv"
+    - "data/raw/WOL991_2025_Jan.csv"
+    - "data/raw/WOL991_2025_Feb.csv"
+    - "data/raw/WOL991_2025_Mar.csv"
+    - "data/raw/WOL991_2025_Apr.csv"
+    - "data/raw/WOL981_2025_Apr.csv"
+    - "data/raw/GQU478_2025_Mar.csv"
+    - "data/raw/WOM077_2025_Apr.csv"
+
+# Output files
+output:
+  # Events
+  events_csv: "data/events/fuel_theft_events.csv"
+  events_with_features: "data/events/events_with_features.csv"
+  
+  # Models
+  random_forest_model: "data/models/random_forest_calibrated.pkl"
+  logistic_regression_model: "data/models/logistic_regression_calibrated.pkl"
+  xgboost_extended: "data/models/xgboost_extended_pattern.pkl"
+  xgboost_short: "data/models/xgboost_short_pattern.pkl"
+  lightgbm_model: "data/models/lightgbm_tuned.pkl"
+  isolation_forest_model: "data/models/isolation_forest.pkl"
+  
+  # Model artifacts
+  preprocessor: "data/models/feature_preprocessor.pkl"
+  vehicle_stats: "data/models/vehicle_normalization.json"
+  noise_thresholds: "data/models/noise_thresholds.json"
+  hotspot_clusters: "data/models/hotspot_clusters.json"
+  pattern_thresholds: "data/models/pattern_thresholds.json"
+  
+  # Evaluation reports
+  overall_metrics: "data/reports/comprehensive_metrics_overall.csv"
+  per_pattern_metrics: "data/reports/thresholds_per_pattern.csv"
+  confusion_matrices: "data/reports/confusion_matrices_overall.csv"
+  feature_importance: "data/reports/feature_importance.csv"
+  top_predictions: "data/reports/top_predictions_comprehensive.csv"
+  
+  # Visualizations
+  pr_curve_overall: "data/reports/pr_curve_overall.png"
+  pr_curve_per_pattern: "data/reports/pr_curve_per_pattern.png"
+  
+  # Summary
+  event_summary: "data/reports/event_summary.csv"
+  data_quality_report: "data/reports/data_quality_report.json"
+
+# Logging
+logging:
+  log_dir: "logs"
+  log_file: "logs/fuel_theft_detection.log"
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+
+# Column name mappings (for standardizing different CSV formats)
+column_mapping:
+  vehicle_id:
+    - "vehicle_id"
+    - "vehiculo"
+    - "id_vehiculo"
+    - "vehicle"
+  
+  timestamp:
+    - "timestamp"
+    - "time"
+    - "fecha_hora"
+    - "datetime"
+    - "date_time"
+  
+  latitude:
+    - "latitude"
+    - "lat"
+  
+  longitude:
+    - "longitude"
+    - "lon"
+    - "lng"
+    - "longitud"
+  
+  speed_kmh:
+    - "speed_kmh"
+    - "speed"
+    - "velocidad"
+    - "speed(km/h)"
+  
+  ignition:
+    - "ignition"
+    - "ign"
+    - "ignition_status"
+    - "switch_ignition"
+  
+  total_fuel_gal:
+    - "total_fuel_gal"
+    - "totalfuel"
+    - "fuel_total_gal"
+    - "total_fuel"
+  
+  # Optional: labels for supervised training
+  label:
+    - "stationary_drain"
+    - "label"
+    - "is_theft"
+    - "target"
+    - "y"
