@@ -31,6 +31,7 @@ output:
   # Events
   events_csv: "data/events/fuel_theft_events.csv"
   events_with_features: "data/events/events_with_features.csv"
+  noise_envelopes: "data/events/noise_envelopes.csv"
   
   # Models
   random_forest_model: "data/models/random_forest_calibrated.pkl"
@@ -67,7 +68,7 @@ output:
   missingness: "data/reports/missingness.csv"
   cadence_by_state: "data/reports/cadence_by_state.csv"
   rate_stats_by_state: "data/reports/rate_stats_by_state.csv"
-  noise_envelopes: "data/reports/noise_envelopes_stationary_on.csv"
+  noise_envelopes_report: "data/reports/noise_envelopes_stationary_on.csv"
   stationary_segments: "data/reports/stationary_segments_all.csv"
   candidate_events: "data/reports/candidate_events_flagged.csv"
 

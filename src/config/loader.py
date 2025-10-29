@@ -150,6 +150,7 @@ def load_path_config(config_path: Path) -> PathConfig:
     output = OutputPaths(
         events_csv=Path(cfg['output']['events_csv']),
         events_with_features=Path(cfg['output']['events_with_features']),
+        noise_envelopes=Path(cfg['output']['noise_envelopes']),
         random_forest_model=Path(cfg['output']['random_forest_model']),
         logistic_regression_model=Path(cfg['output']['logistic_regression_model']),
         xgboost_extended=Path(cfg['output']['xgboost_extended']),

@@ -271,6 +271,7 @@ class OutputPaths:
     # Events
     events_csv: Path
     events_with_features: Path
+    noise_envelopes: Path
     
     # Models
     random_forest_model: Path
