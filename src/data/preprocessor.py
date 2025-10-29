@@ -1,5 +1,5 @@
 """
-Data preprocessing: cleaning, outlier removal, feature derivation.
+Data preprocessing: cleaning, outlier removal, feature derivation, signal conditioning.
 Single Responsibility: Transform raw data into analysis-ready format.
 """
 
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 class DataPreprocessor:
     """
     Data preprocessing pipeline for fuel theft detection.
-    Handles outlier removal, gap interpolation, and feature derivation.
+    Handles outlier removal, gap interpolation, feature derivation, and signal conditioning.
     """
     
     def __init__(self, config: DetectionConfig):
@@ -135,9 +135,9 @@ class DataPreprocessor:
         
         return df
     
-    def derive_features(self, df: pd.DataFrame) -> pd.DataFrame:
+    def derive_basic_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Derive basic features needed for detection.
+        Derive basic movement and state features.
         
         Args:
             df: DataFrame with raw data
@@ -152,19 +152,103 @@ class DataPreprocessor:
         
         # Time difference in seconds
         df["dt_s"] = df.groupby("vehicle_id")["timestamp"].diff().dt.total_seconds()
+        df["delta_sec"] = df["dt_s"]  # Alias for compatibility
         
         # Movement detection
-        df["moving"] = df["speed_kmh"].fillna(np.inf) > self.config.stationary.speed_threshold_kmh
+        df["moving"] = df["speed_kmh"].fillna(0) > self.config.stationary.speed_threshold_kmh
+        df["is_moving"] = df["ignition"] & df["moving"]  # Moving = ignition ON + speed > threshold
         
         # Stationary states
         df["stationary_on"] = (~df["moving"]) & (df["ignition"] == True)
+        df["is_stationary_on"] = df["stationary_on"]  # Alias
+        
         df["ign_off"] = df["ignition"] == False
+        df["is_ign_off"] = df["ign_off"]  # Alias
+        
         df["stationary"] = df["stationary_on"] | df["ign_off"]
+        df["is_stationary"] = df["stationary"]  # Alias
         
         # Fuel change
         df["dfuel"] = df.groupby("vehicle_id")["total_fuel_gal"].diff()
+        df["delta_fuel"] = df["dfuel"]  # Alias
         
         logger.info("✓ Derived features: dt_s, moving, stationary, stationary_on, ign_off, dfuel")
+        
+        return df
+
+    def derive_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        High-level feature derivation wrapper used by tests and pipeline steps.
+        Ensures timestamps are UTC-normalized before deriving movement/fuel deltas.
+        
+        Args:
+            df: DataFrame containing at least vehicle_id, timestamp, speed, ignition, total_fuel_gal
+        
+        Returns:
+            DataFrame with derived temporal and state features
+        """
+        required_columns = {"vehicle_id", "timestamp"}
+        missing = required_columns - set(df.columns)
+        if missing:
+            raise ValueError(f"Missing required columns for feature derivation: {sorted(missing)}")
+        
+        features = df.copy()
+        features = self.normalize_timestamps(features)
+        features = features.sort_values(["vehicle_id", "timestamp"]).reset_index(drop=True)
+        
+        return self.derive_basic_features(features)
+    
+    def calculate_fuel_rate(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Calculate fuel consumption rate in gallons per minute.
+        
+        Args:
+            df: DataFrame with fuel and time data
+        
+        Returns:
+            DataFrame with rate_gpm column
+        """
+        logger.info("Calculating fuel consumption rate...")
+        
+        df = df.copy()
+        
+        # Calculate rate (gal/min)
+        df["rate_gpm"] = df["delta_fuel"] / (df["delta_sec"] / 60.0)
+        
+        # Replace infinite values with NaN
+        df.loc[~np.isfinite(df["rate_gpm"]), "rate_gpm"] = np.nan
+        
+        logger.info("✓ Fuel rate calculated (rate_gpm)")
+        
+        return df
+    
+    def apply_signal_conditioning(self, df: pd.DataFrame, window: int = 5) -> pd.DataFrame:
+        """
+        Apply signal conditioning using rolling median filter.
+        Helps smooth noisy fuel sensor readings.
+        
+        Args:
+            df: DataFrame with fuel data
+            window: Rolling window size (default: 5)
+        
+        Returns:
+            DataFrame with smoothed fuel column
+        """
+        logger.info(f"Applying signal conditioning (rolling median, window={window})...")
+        
+        df = df.copy()
+        df["fuel_med5"] = np.nan
+        
+        for vid in df["vehicle_id"].unique():
+            mask = df["vehicle_id"] == vid
+            if mask.sum() > 0:
+                df.loc[mask, "fuel_med5"] = df.loc[mask, "total_fuel_gal"].rolling(
+                    window=window,
+                    min_periods=1,
+                    center=True
+                ).median()
+        
+        logger.info("✓ Signal conditioning applied (fuel_med5)")
         
         return df
     
@@ -191,6 +275,16 @@ class DataPreprocessor:
         """
         Apply complete preprocessing pipeline.
         
+        Pipeline order:
+        1. Normalize timestamps to UTC
+        2. Sort data by vehicle and time
+        3. Derive basic features (dt_s, moving, stationary, dfuel)
+        4. Remove outliers
+        5. Interpolate gaps in stationary segments
+        6. Recalculate dfuel after interpolation
+        7. Calculate fuel consumption rate
+        8. Apply signal conditioning (rolling median)
+        
         Args:
             df: Raw DataFrame
         
@@ -206,7 +300,7 @@ class DataPreprocessor:
         df = df.sort_values(["vehicle_id", "timestamp"]).reset_index(drop=True)
         
         # 3. Derive basic features (needed for stationary detection)
-        df = self.derive_features(df)
+        df = self.derive_basic_features(df)
         
         # 4. Remove outliers
         df = self.remove_outliers(df)
@@ -216,6 +310,13 @@ class DataPreprocessor:
         
         # 6. Recalculate dfuel after interpolation
         df["dfuel"] = df.groupby("vehicle_id")["total_fuel_gal"].diff()
+        df["delta_fuel"] = df["dfuel"]  # Keep alias
+        
+        # 7. Calculate fuel rate
+        df = self.calculate_fuel_rate(df)
+        
+        # 8. Apply signal conditioning
+        df = self.apply_signal_conditioning(df, window=5)
         
         logger.info(f"✓ Preprocessing complete: {len(df):,} rows, "
                    f"{df['vehicle_id'].nunique()} vehicles")

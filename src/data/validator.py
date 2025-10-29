@@ -10,6 +10,8 @@ import logging
 import json
 from pathlib import Path
 
+from src.utils.timezone import ensure_series_utc
+
 logger = logging.getLogger(__name__)
 
 
@@ -89,25 +91,33 @@ def validate_timestamps(df: pd.DataFrame) -> pd.DataFrame:
     if "timestamp" not in df.columns:
         raise ValueError("Timestamp column not found")
     
+    # Normalize timezone to UTC to avoid naive vs aware comparisons
+    ts = ensure_series_utc(df["timestamp"]) if not getattr(df["timestamp"].dtype, 'tz', None) else df["timestamp"]
+
     # Check for NaT values
-    invalid_mask = df["timestamp"].isna()
+    invalid_mask = ts.isna()
     n_invalid = invalid_mask.sum()
-    
+
     if n_invalid > 0:
         logger.warning(f"Removing {n_invalid:,} rows with invalid timestamps")
-        df = df.dropna(subset=["timestamp"])
+        df = df.loc[~invalid_mask].copy()
+        ts = ts.loc[df.index]
     else:
         logger.info("✓ All timestamps valid")
-    
+
     # Check for future dates (likely data errors)
     now = pd.Timestamp.now(tz='UTC')
-    future_mask = df["timestamp"] > now
+    future_mask = ts > now
     n_future = future_mask.sum()
-    
+
     if n_future > 0:
         logger.warning(f"Found {n_future:,} future timestamps - removing")
-        df = df[~future_mask]
-    
+        df = df.loc[~future_mask].copy()
+        ts = ts.loc[df.index]
+
+    # Persist normalized timestamp column
+    df["timestamp"] = ts
+
     return df
 
 
@@ -171,7 +181,7 @@ def check_missing_values(df: pd.DataFrame) -> Dict[str, int]:
         Dictionary with missing value counts per column
     """
     missing = df.isna().sum()
-    missing_dict = missing[missing > 0].to_dict()
+    missing_dict = {col: int(count) for col, count in missing.items() if count > 0}
     
     if missing_dict:
         logger.warning("Missing values detected:")
@@ -223,15 +233,15 @@ def generate_quality_report(df: pd.DataFrame, output_path: Optional[Path] = None
     logger.info("Generating data quality report...")
     
     report = {
-        "total_rows": len(df),
-        "total_columns": len(df.columns),
-        "vehicles": df["vehicle_id"].nunique() if "vehicle_id" in df.columns else 0,
+        "total_rows": int(len(df)),
+        "total_columns": int(len(df.columns)),
+        "vehicles": int(df["vehicle_id"].nunique()) if "vehicle_id" in df.columns else 0,
         "date_range": {
             "start": str(df["timestamp"].min()) if "timestamp" in df.columns else None,
             "end": str(df["timestamp"].max()) if "timestamp" in df.columns else None
         },
         "missing_values": check_missing_values(df),
-        "duplicates": df.duplicated(subset=["vehicle_id", "timestamp"]).sum(),
+        "duplicates": int(df.duplicated(subset=["vehicle_id", "timestamp"]).sum()),
         "value_ranges": check_value_ranges(df)
     }
     

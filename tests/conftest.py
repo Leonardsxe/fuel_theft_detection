@@ -107,6 +107,60 @@ def temp_csv_file(tmp_path):
 
 
 @pytest.fixture
+def temp_spanish_csv_file(tmp_path):
+    """
+    Create a temporary CSV file with Spanish column names.
+    
+    Args:
+        tmp_path: Pytest tmp_path fixture
+    
+    Returns:
+        Path to temporary CSV file
+    """
+    csv_path = tmp_path / "datos_vehiculo.csv"
+    
+    test_data = pd.DataFrame({
+        'Vehiculo': ['V1', 'V2', 'V1'],
+        'Tiempo': ['2025-01-15 10:00:00', '2025-01-15 10:00:00', '2025-01-15 10:05:00'],
+        'Coordenadas': ['40.7128, -74.0060', '34.0522, -118.2437', '40.7130, -74.0062'],
+        'Velocidad': ['50 km/h', '60 km/h', '55.5 km/h'],
+        'Ignición': ['encendido', 'encendido', 'apagado'],
+        'Tanque Total': [100.0, 100.0, 99.5]
+    })
+    
+    test_data.to_csv(csv_path, index=False)
+    
+    return csv_path
+
+
+@pytest.fixture
+def temp_separate_tanks_csv(tmp_path):
+    """
+    Create CSV with separate left/right fuel tanks.
+    
+    Args:
+        tmp_path: Pytest tmp_path fixture
+    
+    Returns:
+        Path to temporary CSV file
+    """
+    csv_path = tmp_path / "vehicle_tanks.csv"
+    
+    test_data = pd.DataFrame({
+        'Vehicle_ID': ['V1', 'V1', 'V1'],
+        'Timestamp': ['2025-01-15 10:00:00', '2025-01-15 10:05:00', '2025-01-15 10:10:00'],
+        'Left_Tank': [50.0, 49.5, 49.0],
+        'Right_Tank': [48.0, 47.5, 47.0],
+        'Speed': [0, 0, 0],
+        'Ignition': [1, 1, 1]
+    })
+    
+    test_data.to_csv(csv_path, index=False)
+    
+    return csv_path
+
+
+@pytest.fixture
 def sample_coordinates():
     """
     Sample GPS coordinates for testing distance calculations.
@@ -120,6 +174,58 @@ def sample_coordinates():
     })
 
 
+@pytest.fixture
+def sample_coordinate_strings():
+    """
+    Sample coordinate strings for testing parsing.
+    
+    Returns:
+        List of coordinate strings
+    """
+    return [
+        "40.7128, -74.0060",    # NYC
+        "34.0522,-118.2437",    # LA (no spaces)
+        "invalid",               # Invalid
+        "",                      # Empty
+        np.nan                   # NaN
+    ]
+
+
+@pytest.fixture
+def sample_speed_values():
+    """
+    Sample speed values in various formats for testing parsing.
+    
+    Returns:
+        List of speed values
+    """
+    return [
+        50.0,           # Numeric float
+        60,             # Numeric int
+        "45.5",         # String numeric
+        "50 km/h",      # With units
+        "60.5 km/h",    # With units and decimal
+        "invalid",      # Invalid
+        np.nan          # NaN
+    ]
+
+
+@pytest.fixture
+def sample_ignition_values():
+    """
+    Sample ignition values in various formats for testing parsing.
+    
+    Returns:
+        Dictionary of ignition values by language/format
+    """
+    return {
+        'boolean': [True, False],
+        'numeric': [1, 0, 1.0, 0.0],
+        'english': ["true", "false", "on", "off", "yes", "no"],
+        'spanish': ["encendido", "apagado", "si", "sí", "no"]
+    }
+
+
 # Configure pytest
 def pytest_configure(config):
     """Pytest configuration hook"""
@@ -129,6 +235,9 @@ def pytest_configure(config):
     )
     config.addinivalue_line(
         "markers", "integration: marks tests as integration tests"
+    )
+    config.addinivalue_line(
+        "markers", "parser: marks tests for parser utilities"
     )
 
 

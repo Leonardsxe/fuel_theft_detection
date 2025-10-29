@@ -47,7 +47,7 @@ output:
   hotspot_clusters: "data/models/hotspot_clusters.json"
   pattern_thresholds: "data/models/pattern_thresholds.json"
   
-  # Evaluation reports
+  # Reports
   overall_metrics: "data/reports/comprehensive_metrics_overall.csv"
   per_pattern_metrics: "data/reports/thresholds_per_pattern.csv"
   confusion_matrices: "data/reports/confusion_matrices_overall.csv"
@@ -61,6 +61,15 @@ output:
   # Summary
   event_summary: "data/reports/event_summary.csv"
   data_quality_report: "data/reports/data_quality_report.json"
+  
+  # EDA outputs (for compatibility with original script)
+  csv_inventory: "data/reports/csv_inventory_overview.csv"
+  missingness: "data/reports/missingness.csv"
+  cadence_by_state: "data/reports/cadence_by_state.csv"
+  rate_stats_by_state: "data/reports/rate_stats_by_state.csv"
+  noise_envelopes: "data/reports/noise_envelopes_stationary_on.csv"
+  stationary_segments: "data/reports/stationary_segments_all.csv"
+  candidate_events: "data/reports/candidate_events_flagged.csv"
 
 # Logging
 logging:
@@ -68,7 +77,7 @@ logging:
   log_file: "logs/fuel_theft_detection.log"
   level: "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
 
-# Column name mappings (for standardizing different CSV formats)
+# Column name mappings (including Spanish names for Latin American data sources)
 column_mapping:
   vehicle_id:
     - "vehicle_id"
@@ -77,15 +86,25 @@ column_mapping:
     - "vehicle"
   
   timestamp:
+    - "tiempo"
     - "timestamp"
     - "time"
-    - "fecha_hora"
     - "datetime"
-    - "date_time"
+    - "fecha"
+    - "fechahora"
+    - "fecha_hora"
+    - "fecha hora"
+  
+  coordinates:
+    - "coordenadas"
+    - "coordinates"
+    - "coords"
+    - "coordinate"
   
   latitude:
     - "latitude"
     - "lat"
+    - "latitud"
   
   longitude:
     - "longitude"
@@ -94,26 +113,62 @@ column_mapping:
     - "longitud"
   
   speed_kmh:
-    - "speed_kmh"
-    - "speed"
     - "velocidad"
-    - "speed(km/h)"
+    - "speed"
+    - "speed_kmh"
+    - "velocidad km/h"
+    - "velocidad (km/h)"
   
   ignition:
+    - "ignición"
+    - "ignicion"
     - "ignition"
-    - "ign"
     - "ignition_status"
     - "switch_ignition"
   
   total_fuel_gal:
-    - "total_fuel_gal"
-    - "totalfuel"
-    - "fuel_total_gal"
+    - "tanque total"
     - "total_fuel"
+    - "fuel_level"
+    - "fuel"
+    - "totalfuel"
+    - "total_fuel_gal"
+    - "fuel_total_gal"
   
-  # Optional: labels for supervised training
+  left_tank:
+    - "tanque izquierdo"
+    - "left_tank"
+    - "left_fuel"
+    - "tanque_izquierdo"
+  
+  right_tank:
+    - "tanque derecho"
+    - "right_tank"
+    - "right_fuel"
+    - "tanque_derecho"
+  
+  # Optional columns
+  location:
+    - "ubicación"
+    - "ubicacion"
+    - "location"
+    - "address"
+  
+  altitude:
+    - "altitud"
+    - "altitude"
+    - "alt"
+  
+  driver:
+    - "driver"
+    - "driver_name"
+    - "conductor"
+  
+  # Label column for supervised training
   label:
     - "stationary_drain"
+    - "drain"
+    - "fuel_drain"
     - "label"
     - "is_theft"
     - "target"
