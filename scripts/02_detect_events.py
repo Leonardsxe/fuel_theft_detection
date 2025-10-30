@@ -298,22 +298,25 @@ def main():
             logger.info(f"Saved noise envelopes to {noise_path}")
         
         # 6. Cluster stationary locations (TRAIN ONLY)
-        log_section("CLUSTERING STATIONARY LOCATIONS")
+        stationary_mask = df['stationary']
 
-        stationary_mask = df['stationary'].values
-        stationary_train_mask = train_mask & stationary_mask
+        stationary_with_coords = df[stationary_mask & 
+                                df['latitude'].notna() & 
+                                df['longitude'].notna()].copy()
 
-        stationary_indices = np.where(stationary_mask)[0]
-        stationary_train_indices = np.where(stationary_train_mask)[0]
 
-        final_train_mask = np.isin(stationary_indices, stationary_train_indices)
+        stationary_train_mask = train_mask[stationary_with_coords.index]
 
-        stationary_pts = cluster_stationary_points(df, config.detection.clustering, final_train_mask)
-        
+        print(f"Final stationary points: {len(stationary_with_coords)}")
+        print(f"Final train mask: {len(stationary_train_mask)}")
+        print(f"Sizes match: {len(stationary_with_coords) == len(stationary_train_mask)}")
+
+        stationary_pts = cluster_stationary_points(stationary_with_coords, config.detection.clustering, stationary_train_mask)
+
         if not stationary_pts.empty:
             n_clusters = stationary_pts[stationary_pts["cluster_id"] >= 0]["cluster_id"].nunique()
             n_noise = (stationary_pts["cluster_id"] == -1).sum()
-            logger.info(f"Found {n_clusters} hotspot clusters, {n_noise} noise points")
+            logger.info(f"Found {n_clusters} hotspot clusters, {n_noise} noise points")        
         
         # 7. Detect events
         log_section("DETECTING POTENTIAL THEFT EVENTS")

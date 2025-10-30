@@ -81,7 +81,7 @@ class EventDetector:
         
         for pattern_key, pattern in patterns.items():
             pattern_events = self._scan_with_pattern(
-                g, pattern, threshold_step, threshold_cum, state
+                g, pattern, threshold_step, threshold_cum, state, vid
             )
             events.extend(pattern_events)
         
@@ -93,7 +93,8 @@ class EventDetector:
         pattern: DetectionPattern,
         threshold_step: float,
         threshold_cum: float,
-        state: str
+        state: str,
+        vehicle_id: str
     ) -> List[Dict]:
         """
         Scan data for events matching a specific pattern.
@@ -104,13 +105,14 @@ class EventDetector:
             threshold_step: Step threshold
             threshold_cum: Cumulative threshold
             state: State name
+            vehicle_id: Vehicle identifier
         
         Returns:
             List of detected events
         """
         events = []
         
-        times = data["timestamp"].values
+        timestamps = data["timestamp"].reset_index(drop=True)
         dfuel = data["dfuel"].values.astype(float)
         n = len(data)
         
@@ -118,9 +120,9 @@ class EventDetector:
         for start_idx in range(n):
             for end_idx in range(start_idx + 1, n):
                 # Calculate duration
-                duration_min = float(
-                    (times[end_idx] - times[start_idx]).astype("timedelta64[s]").astype(float) / 60.0
-                )
+                start_ts = timestamps.iloc[start_idx]
+                end_ts = timestamps.iloc[end_idx]
+                duration_min = float((end_ts - start_ts).total_seconds() / 60.0)
                 
                 # Check if duration is in pattern range
                 if not pattern.validate_duration(duration_min):
@@ -168,9 +170,9 @@ class EventDetector:
                 
                 # Create event
                 event = {
-                    "vehicle_id": vid,
-                    "start_time": pd.Timestamp(times[start_idx]),
-                    "end_time": pd.Timestamp(times[end_idx]),
+                    "vehicle_id": vehicle_id,
+                    "start_time": start_ts,
+                    "end_time": end_ts,
                     "duration_min": duration_min,
                     "drop_gal": cum_drop,
                     "min_step_gal": max_step,
