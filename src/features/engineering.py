@@ -1,11 +1,21 @@
 """
-Feature engineering orchestrator.
-Coordinates all feature modules and provides unified interface.
-"""
+Feature Engineering Orchestration — function-first pipeline using your config & utils.
 
-import pandas as pd
+Pipeline:
+  1) add_event_statistics(events_df, raw_df?) — core event metrics (drop_gal, rate_gpm, min_step_gal, duration_min)
+  2) add_all_temporal_features(events_df)
+  3) add_location_features(events_df, raw_df)              [if config.include_spatial]
+  4) add_pre_event_context(..., lookback_hours)            [if config.include_behavioral]
+     add_movement_variability(events_df, raw_df)           [if config.include_behavioral]
+  5) VehicleNormalizer — fit on TRAIN ONLY, then transform (adds vehicle z-scores + drop% of avg/max if raw available)
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Optional
+
 import numpy as np
-import logging
+import pandas as pd
 
 from src.config.settings import FeatureConfig
 from src.features.temporal import add_all_temporal_features
@@ -14,145 +24,59 @@ from src.features.behavioral import add_pre_event_context, add_movement_variabil
 from src.features.normalization import VehicleNormalizer
 from src.features.event_features import add_event_statistics
 
-logger = logging.getLogger(__name__)
+
+@dataclass
+class _Defaults:
+    lookback_hours: int = 2
 
 
 class FeatureEngineer:
-    """
-    Complete feature engineering pipeline.
-    Coordinates all feature modules with train/test awareness.
-    """
-    
-    def __init__(self, config: FeatureConfig):
-        """
-        Initialize feature engineer.
-        
-        Args:
-            config: Feature configuration
-        """
-        self.config = config
-        self.normalizer = VehicleNormalizer() if config.enable_vehicle_normalization else None
-        self.is_fitted = False
-    
-    def fit(self, raw_df: pd.DataFrame, train_mask: np.ndarray) -> 'FeatureEngineer':
-        """
-        Fit on training data (for normalization).
-        
-        Args:
-            raw_df: Raw telemetry DataFrame
-            train_mask: Boolean mask for training data
-        
-        Returns:
-            Self for chaining
-        """
-        logger.info("Fitting feature engineer on training data...")
-        
-        # Fit normalizer if enabled
-        if self.normalizer:
-            # Need events for normalization - this is called after event detection
-            pass
-        
-        self.is_fitted = True
-        logger.info("✓ Feature engineer fitted")
-        
+    def __init__(self, config: Optional[FeatureConfig] = None) -> None:
+        self.config = config or FeatureConfig()
+        self.normalizer = VehicleNormalizer()
+        self._train_mask: Optional[np.ndarray] = None
+
+    @property
+    def is_fitted(self) -> bool:
+        return self.normalizer.is_fitted
+
+    def fit(self, events_df: pd.DataFrame, train_mask: np.ndarray) -> "FeatureEngineer":
+        # We defer fitting until after we’ve computed event stats + temporal/spatial/behavioral in transform().
+        # Here we only store the mask.
+        self._train_mask = train_mask
         return self
-    
-    def transform(
-        self,
-        events_df: pd.DataFrame,
-        raw_df: pd.DataFrame
-    ) -> pd.DataFrame:
-        """
-        Apply all feature engineering steps.
-        
-        Args:
-            events_df: Events DataFrame
-            raw_df: Raw telemetry DataFrame
-        
-        Returns:
-            Events DataFrame with all features added
-        """
-        logger.info("Engineering features...")
-        
-        if events_df.empty:
-            logger.warning("No events to engineer features for")
-            return events_df
-        
-        # 1. Temporal features
-        if self.config.enable_temporal_features:
-            events_df = add_all_temporal_features(events_df)
-        
-        # 2. Spatial features
-        if self.config.enable_spatial_features:
-            events_df = add_location_features(events_df, raw_df)
-        
-        # 3. Event statistics
-        events_df = add_event_statistics(events_df, raw_df)
-        
-        # 4. Behavioral features
-        if self.config.enable_behavioral_features:
-            events_df = add_pre_event_context(
-                events_df, raw_df,
-                lookback_hours=self.config.behavioral_lookback_hours
-            )
-            events_df = add_movement_variability(events_df, raw_df)
-        
-        # 5. Vehicle normalization
-        if self.config.enable_vehicle_normalization and self.normalizer:
-            events_df = self.normalizer.transform(events_df)
-            events_df = self.normalizer.add_relative_features(events_df, raw_df)
-        
-        logger.info(f"✓ Feature engineering complete: {len(events_df.columns)} total columns")
-        
-        return events_df
-    
-    def fit_transform(
-        self,
-        events_df: pd.DataFrame,
-        raw_df: pd.DataFrame,
-        train_mask: np.ndarray
-    ) -> pd.DataFrame:
-        """
-        Fit and transform in one step.
-        
-        Args:
-            events_df: Events DataFrame
-            raw_df: Raw telemetry DataFrame
-            train_mask: Boolean mask for training events
-        
-        Returns:
-            Events DataFrame with features
-        """
-        # Fit normalizer on training events
-        if self.normalizer:
-            self.normalizer.fit(events_df, train_mask)
-        
-        self.is_fitted = True
-        
+
+    def transform(self, events_df: pd.DataFrame, raw_df: Optional[pd.DataFrame] = None) -> pd.DataFrame:
+        if self._train_mask is None:
+            # If user forgot to pass fit(), we still allow inference-only transforms (no fitting).
+            self._train_mask = np.zeros(len(events_df), dtype=bool)
+
+        df = events_df.copy()
+
+        # 1) Core event stats first (ensures drop_gal/rate_gpm/min_step_gal/duration_min exist)
+        df = add_event_statistics(df)
+
+        # 2) Temporal
+        df = add_all_temporal_features(df)
+
+        # 3) Spatial
+        if getattr(self.config, "include_spatial", True) and raw_df is not None:
+            df = add_location_features(df, raw_df)
+
+        # 4) Behavioral
+        if getattr(self.config, "include_behavioral", True) and raw_df is not None:
+            lookback = getattr(self.config, "lookback_hours", _Defaults.lookback_hours)
+            df = add_pre_event_context(df, raw_df, lookback_hours=int(lookback))
+            df = add_movement_variability(df, raw_df)
+
+        # 5) Vehicle normalization (fit-on-train-only; then transform)
+        if getattr(self.config, "include_normalization", True):
+            if not self.normalizer.is_fitted and self._train_mask is not None:
+                self.normalizer.fit(df, self._train_mask)
+            df = self.normalizer.transform(df, raw_df)
+
+        return df
+
+    def fit_transform(self, events_df: pd.DataFrame, raw_df: Optional[pd.DataFrame], train_mask: np.ndarray) -> pd.DataFrame:
+        self.fit(events_df, train_mask)
         return self.transform(events_df, raw_df)
-
-
-def engineer_features(
-    events_df: pd.DataFrame,
-    raw_df: pd.DataFrame,
-    config: FeatureConfig,
-    train_mask: Optional[np.ndarray] = None
-) -> pd.DataFrame:
-    """
-    Convenience function for feature engineering.
-    
-    Args:
-        events_df: Events DataFrame
-        raw_df: Raw telemetry DataFrame
-        config: Feature configuration
-        train_mask: Optional training mask
-    
-    Returns:
-        Events DataFrame with features
-    """
-    engineer = FeatureEngineer(config)
-    
-    if train_mask is not None:
-        return engineer.fit_transform(events_df, raw_df, train_mask)
-    else:
-        return engineer.transform(events_df, raw_df)
