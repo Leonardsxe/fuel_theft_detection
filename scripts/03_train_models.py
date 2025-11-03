@@ -7,6 +7,7 @@ Trains fuel theft detection models using the modular architecture.
 - Creates time-aware split (using shared utils)
 - Engineers features (temporal/spatial/behavioral + vehicle normalization)
 - Trains/evaluates multiple models
+- Optionally trains pattern-specific models
 - Saves models and reports
 
 Usage:
@@ -42,8 +43,9 @@ from src.utils.splitting import (
 # === Features & models ===
 from src.config.settings import FeatureConfig
 from src.features.engineering import FeatureEngineer
-from src.models.train import ModelTrainer, _dedupe_columns
+from src.models.training import ModelTrainer, _dedupe_columns
 from src.models.evaluation import ModelEvaluator
+from src.models.pattern_models import PatternSpecificTrainer
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 logger = logging.getLogger(__name__)
@@ -53,9 +55,7 @@ logger = logging.getLogger(__name__)
 # Path resolution
 # ---------------------------
 def _resolve_paths_from_config(cfg) -> dict:
-    """
-    Pull canonical paths from typed config with safe fallbacks.
-    """
+    """Pull canonical paths from typed config with safe fallbacks."""
     paths = {}
 
     # Inputs (must exist)
@@ -163,8 +163,10 @@ def _engineer_features(events_df: pd.DataFrame, raw_df: pd.DataFrame, event_trai
 
     # Quick descriptive stats (not model importances)
     stats = enriched.select_dtypes(include=[np.number]).describe().T.reset_index().rename(columns={"index": "feature"})
-    stats.to_csv(Path(cfg.paths.data.reports) / "feature_statistics.csv", index=False)
-    logger.info(f"Saved feature stats → {Path(cfg.paths.data.reports) / 'feature_statistics.csv'}")
+    stats_path = Path(cfg.paths.data.reports) / "feature_statistics.csv"
+    stats_path.parent.mkdir(parents=True, exist_ok=True)
+    stats.to_csv(stats_path, index=False)
+    logger.info(f"Saved feature stats → {stats_path}")
 
     # Brief overview of generated feature families
     new_features = set(enriched.columns) - set(events_df.columns)
@@ -274,27 +276,72 @@ def _evaluate_models(
 
 
 def _save_models(models: dict, paths: dict, cfg) -> None:
-    """
-    Save trained models to canonical artifact paths from config if present,
-    otherwise fall back to models_dir/<name>.pkl
-    """
+    """Save trained models to canonical artifact paths from config."""
     # Preferred artifact filenames from config
     artifact_targets = {
         "random_forest": getattr(cfg.paths.output, "random_forest_model", None),
         "logistic_regression": getattr(cfg.paths.output, "logistic_regression_model", None),
-        "xgboost": getattr(cfg.paths.output, "xgboost_extended", None),   # if you train a single XGB
+        "xgboost": getattr(cfg.paths.output, "xgboost_extended", None),
         "lightgbm": getattr(cfg.paths.output, "lightgbm_model", None),
         "isolation_forest": getattr(cfg.paths.output, "isolation_forest_model", None),
     }
 
+    # Map script model names to config names
+    name_mapping = {
+        "logreg_cal": "logistic_regression",
+        "rf_cal": "random_forest",
+        "xgb": "xgboost",
+        "lgbm": "lightgbm",
+        "iso_forest": "isolation_forest",
+    }
+
     for name, model in models.items():
-        target = artifact_targets.get(name)
+        config_name = name_mapping.get(name, name)
+        target = artifact_targets.get(config_name)
         if target is None:
             target = Path(paths["models_dir"]) / f"{name}.pkl"
         Path(target).parent.mkdir(parents=True, exist_ok=True)
         joblib.dump(model, target)
         kb = Path(target).stat().st_size / 1024
         logger.info(f"Saved {name} → {target} ({kb:.1f} KB)")
+
+
+def _train_pattern_specific_models(
+    events_df: pd.DataFrame,
+    X: pd.DataFrame,
+    y: np.ndarray,
+    event_train_mask: np.ndarray,
+    event_test_mask: np.ndarray,
+    trainer: ModelTrainer,
+    cfg,
+    paths: dict,
+) -> tuple[dict, dict, pd.DataFrame]:
+    """Train pattern-specific models."""
+    
+    logger.info("\n" + "="*60)
+    logger.info("TRAINING PATTERN-SPECIFIC MODELS")
+    logger.info("="*60)
+    
+    pattern_trainer = PatternSpecificTrainer(cfg.model)
+    
+    pattern_models, pattern_thresholds, pattern_results = pattern_trainer.train_pattern_models(
+        events_df=events_df,
+        X=X,
+        y=y,
+        train_mask=event_train_mask,
+        test_mask=event_test_mask,
+        preprocess=trainer.preprocessor,
+    )
+    
+    # Save pattern-specific results
+    if not pattern_results.empty:
+        pattern_results.to_csv(paths["reports_dir"] / "pattern_specific_results.csv", index=False)
+        logger.info(f"Saved pattern results → {paths['reports_dir'] / 'pattern_specific_results.csv'}")
+        
+        # Save pattern models
+        pattern_trainer.save_results(paths["models_dir"])
+    
+    return pattern_models, pattern_thresholds, pattern_results
 
 
 # ---------------------------
@@ -352,29 +399,52 @@ def main() -> int:
         log_section("PREPARING FEATURE MATRIX")
         X, y, feature_names = _prepare_feature_matrix(events_enriched)
 
-        # Train
-        log_section("TRAINING MODELS")
+        # Train baseline models
+        log_section("TRAINING BASELINE MODELS")
         models, trainer = _train_models(X, y, event_train_mask, cfg)
 
-        # Evaluate
-        log_section("EVALUATING MODELS")
+        # Evaluate baseline models
+        log_section("EVALUATING BASELINE MODELS")
         comparison_df, fi_dict = _evaluate_models(models, X, y, event_test_mask, feature_names, cfg, paths)
 
-        # Save models
-        log_section("SAVING MODELS")
+        # Save baseline models
+        log_section("SAVING BASELINE MODELS")
         _save_models(models, paths, cfg)
+
+        # Train pattern-specific models (optional)
+        pattern_models = {}
+        pattern_thresholds = {}
+        pattern_results = pd.DataFrame()
+        
+        if hasattr(cfg.model, 'pattern_models') and cfg.model.pattern_models:
+            pattern_models, pattern_thresholds, pattern_results = _train_pattern_specific_models(
+                events_enriched,
+                X,
+                y,
+                event_train_mask,
+                event_test_mask,
+                trainer,
+                cfg,
+                paths,
+            )
 
         # Summary
         log_section("TRAINING SUMMARY")
         logger.info(f"Events processed: {len(events_enriched):,}")
         logger.info(f"Features used: {len(feature_names)}")
-        logger.info(f"Models trained: {len(models)}")
+        logger.info(f"Baseline models trained: {len(models)}")
+        if pattern_models:
+            logger.info(f"Pattern-specific models trained: {len(pattern_models)}")
         if comparison_df is not None and not comparison_df.empty:
             best = comparison_df.sort_values("pr_auc", ascending=False).iloc[0]
-            logger.info(f"Best model: {best.model}  PR-AUC={best.pr_auc:.4f}")
+            logger.info(f"Best baseline model: {best.model}  PR-AUC={best.pr_auc:.4f}")
+        if not pattern_results.empty:
+            logger.info("\nPattern-specific results:")
+            print(pattern_results[['pattern', 'model_type', 'pr_auc', 'precision', 'recall']].to_string(index=False))
         logger.info(f"Outputs → models: {paths['models_dir']}  reports: {paths['reports_dir']}")
 
         logger.info("✓ Training pipeline completed successfully")
+        logger.info("\n✓ Next step: Run scripts/04_evaluate_models.py")
         return 0
 
     except Exception as e:
