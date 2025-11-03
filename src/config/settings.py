@@ -198,6 +198,7 @@ class LightGBMConfig:
     reg_lambda: float = 0.5
     class_weight: str = "balanced"
     random_state: int = 42
+    n_jobs: int = -1
     verbose: int = -1
 
 
