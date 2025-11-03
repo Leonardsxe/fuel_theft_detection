@@ -12,7 +12,7 @@ Pipeline:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Tuple, Any, List
 
 import numpy as np
 import pandas as pd
@@ -31,52 +31,90 @@ class _Defaults:
 
 
 class FeatureEngineer:
-    def __init__(self, config: Optional[FeatureConfig] = None) -> None:
-        self.config = config or FeatureConfig()
-        self.normalizer = VehicleNormalizer()
-        self._train_mask: Optional[np.ndarray] = None
+    def __init__(self, config):
+        self.config = config
+        self.normalizer: Optional[VehicleNormalizer] = None
+        self.raw_df: Optional[pd.DataFrame] = None
+        self._is_fitted: bool = False
+        # Back-compat: legacy consumers might look for fitted norms dict
+        self._legacy_norms: Optional[dict] = None
+
+    def is_fitted(self) -> bool:
+        """
+        True when the engineer itself is fitted AND (if normalization is enabled)
+        the normalizer is also fitted. This keeps behavior consistent whether or not
+        vehicle normalization is used.
+        """
+        norm_ok = (self.normalizer is None) or getattr(self.normalizer, "is_fitted", False)
+        return bool(self._is_fitted and norm_ok)
 
     @property
-    def is_fitted(self) -> bool:
-        return self.normalizer.is_fitted
+    def fitted_norms(self) -> dict:
+        """
+        Back-compat alias for code that used to read `self._fitted_norms`.
+        Returns per-vehicle stats from the VehicleNormalizer, or {} if unavailable.
+        """
+        if self.normalizer is not None and hasattr(self.normalizer, "vehicle_stats"):
+            return self.normalizer.vehicle_stats
+        return {}
 
-    def fit(self, events_df: pd.DataFrame, train_mask: np.ndarray) -> "FeatureEngineer":
-        # We defer fitting until after we’ve computed event stats + temporal/spatial/behavioral in transform().
-        # Here we only store the mask.
-        self._train_mask = train_mask
+    def fit(
+            self,
+            events_df: pd.DataFrame,
+            raw_df: Optional[pd.DataFrame] = None,
+            train_mask: Optional[np.ndarray] = None,
+            ) -> "FeatureEngineer":
+        """Fit any per-vehicle normalization statistics on TRAIN events only."""
+        self.raw_df = raw_df
+        df = events_df if train_mask is None else events_df.loc[train_mask].copy()
+
+        if getattr(self.config, "enable_vehicle_normalization", True):
+            self.normalizer = VehicleNormalizer()
+            # Fit on TRAIN events (and optionally raw_df if your normalizer uses raw telemetry)
+            self.normalizer.fit(events_df, train_mask=train_mask if train_mask is not None else np.ones(len(events_df), dtype=bool))
+            self._legacy_norms = self.normalizer.vehicle_stats
+        
+        self._is_fitted = True
+
         return self
 
-    def transform(self, events_df: pd.DataFrame, raw_df: Optional[pd.DataFrame] = None) -> pd.DataFrame:
-        if self._train_mask is None:
-            # If user forgot to pass fit(), we still allow inference-only transforms (no fitting).
-            self._train_mask = np.zeros(len(events_df), dtype=bool)
+    def transform(self, events_df: pd.DataFrame) -> pd.DataFrame:
+        if not self._is_fitted:
+            raise RuntimeError("FeatureEngineer.transform() called before fit(). Call fit() or fit_transform() first.")
+        if self.raw_df is None:
+            raise ValueError("FeatureEngineer has no raw_df. Pass raw_df to fit()/fit_transform().")
 
         df = events_df.copy()
-
         # 1) Core event stats first (ensures drop_gal/rate_gpm/min_step_gal/duration_min exist)
-        df = add_event_statistics(df)
+        df = add_event_statistics(df, self.raw_df)
 
         # 2) Temporal
         df = add_all_temporal_features(df)
 
         # 3) Spatial
-        if getattr(self.config, "include_spatial", True) and raw_df is not None:
-            df = add_location_features(df, raw_df)
+        if getattr(self.config, "include_spatial", True) and self.raw_df is not None:
+            df = add_location_features(df, self.raw_df)
 
         # 4) Behavioral
-        if getattr(self.config, "include_behavioral", True) and raw_df is not None:
+        if getattr(self.config, "include_behavioral", True) and self.raw_df is not None:
             lookback = getattr(self.config, "lookback_hours", _Defaults.lookback_hours)
-            df = add_pre_event_context(df, raw_df, lookback_hours=int(lookback))
-            df = add_movement_variability(df, raw_df)
+            df = add_pre_event_context(df, self.raw_df, lookback_hours=int(lookback))
+            df = add_movement_variability(df, self.raw_df)
 
         # 5) Vehicle normalization (fit-on-train-only; then transform)
-        if getattr(self.config, "include_normalization", True):
-            if not self.normalizer.is_fitted and self._train_mask is not None:
-                self.normalizer.fit(df, self._train_mask)
-            df = self.normalizer.transform(df, raw_df)
+        if getattr(self.config, "enable_vehicle_normalization", True) and self.normalizer is not None:
+            # z-scores by vehicle
+            df = self.normalizer.transform(df)
+            # percentages vs avg/max tank scale from raw telemetry
+            df = self.normalizer.add_relative_features(df, self.raw_df)
 
         return df
 
-    def fit_transform(self, events_df: pd.DataFrame, raw_df: Optional[pd.DataFrame], train_mask: np.ndarray) -> pd.DataFrame:
-        self.fit(events_df, train_mask)
-        return self.transform(events_df, raw_df)
+    def fit_transform(
+        self,
+        events_df: pd.DataFrame,
+        raw_df: Optional[pd.DataFrame] = None,
+        train_mask: Optional[np.ndarray] = None,
+    ) -> pd.DataFrame:
+        self.fit(events_df, raw_df=raw_df, train_mask=train_mask)
+        return self.transform(events_df)

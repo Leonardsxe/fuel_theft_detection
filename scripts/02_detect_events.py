@@ -37,90 +37,10 @@ from src.detection.nms import nms_events_dataframe, remove_exact_duplicates
 from src.clustering.assignment import assign_events_to_clusters, calculate_hotspot_statistics
 from src.features.temporal import add_all_temporal_features
 from src.utils.timezone import ensure_series_utc
+from src.utils.splitting import create_temporal_split_on_raw_data
+from src.utils.splitting import map_events_to_split
+
 import logging
-
-
-def create_temporal_split(df: pd.DataFrame, train_ratio: float = 0.80) -> np.ndarray:
-    """
-    Create time-aware train/test split on raw data.
-    
-    Args:
-        df: Raw DataFrame
-        train_ratio: Proportion for training (default: 80%)
-    
-    Returns:
-        Boolean mask for training data
-    """
-    logger = logging.getLogger(__name__)
-    logger.info(f"Creating temporal split ({train_ratio:.0%} train, {1-train_ratio:.0%} test)...")
-    
-    train_mask = np.zeros(len(df), dtype=bool)
-    
-    for vid, vehicle_data in df.groupby("vehicle_id"):
-        cutoff = vehicle_data["timestamp"].quantile(train_ratio)
-        vehicle_train_mask = vehicle_data["timestamp"] <= cutoff
-        train_mask[vehicle_data.index] = vehicle_train_mask.values
-        
-        logger.info(f"  Vehicle {vid}: cutoff at {cutoff}")
-    
-    n_train = train_mask.sum()
-    n_test = (~train_mask).sum()
-    
-    logger.info(f"✓ Split created: {n_train:,} train ({100*n_train/len(df):.1f}%), "
-               f"{n_test:,} test ({100*n_test/len(df):.1f}%)")
-    
-    return train_mask
-
-
-def map_events_to_split(
-    events_df: pd.DataFrame,
-    raw_df: pd.DataFrame,
-    raw_train_mask: np.ndarray
-) -> pd.DataFrame:
-    """
-    Map detected events to train/test split based on midpoint timestamp.
-    
-    Args:
-        events_df: Events DataFrame
-        raw_df: Raw DataFrame
-        raw_train_mask: Training mask for raw data
-    
-    Returns:
-        Events DataFrame with is_train column
-    """
-    logger = logging.getLogger(__name__)
-    logger.info("Mapping events to train/test split...")
-    
-    events_df = events_df.copy()
-    events_df["mid_time"] = (
-        events_df["start_time"] + 
-        (events_df["end_time"] - events_df["start_time"]) / 2
-    )
-    events_df["is_train"] = False
-    
-    # For each vehicle, find the train/test cutoff
-    for vid in events_df["vehicle_id"].unique():
-        vehicle_mask = raw_df["vehicle_id"] == vid
-        vehicle_train_data = raw_df.loc[vehicle_mask & raw_train_mask]
-        
-        if vehicle_train_data.empty:
-            logger.warning(f"No training data for vehicle {vid}")
-            continue
-        
-        train_cutoff = vehicle_train_data["timestamp"].max()
-        
-        # Mark events as train if midpoint is before cutoff
-        vehicle_events_mask = events_df["vehicle_id"] == vid
-        events_df.loc[vehicle_events_mask, "is_train"] = (
-            events_df.loc[vehicle_events_mask, "mid_time"] <= train_cutoff
-        )
-    
-    n_train = events_df["is_train"].sum()
-    n_test = (~events_df["is_train"]).sum()
-    
-    logger.info(f"✓ Events mapped: {n_train} train, {n_test} test")
-    
-    return events_df
 
 
 def attach_labels(events_df: pd.DataFrame, raw_df: pd.DataFrame, label_col: str = "stationary_drain") -> pd.DataFrame:
@@ -266,7 +186,7 @@ def main():
         # 3. Create time-aware train/test split
         log_section("CREATING TRAIN/TEST SPLIT")
         
-        train_mask = create_temporal_split(df, train_ratio=config.model.splitting.train_ratio)
+        train_mask = create_temporal_split_on_raw_data(df, train_ratio=config.model.splitting.train_ratio)
         
         # 4. Segment stationary periods
         log_section("SEGMENTING STATIONARY PERIODS")
