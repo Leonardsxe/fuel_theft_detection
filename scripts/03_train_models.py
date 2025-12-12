@@ -180,10 +180,6 @@ def _engineer_features(events_df: pd.DataFrame, raw_df: pd.DataFrame, event_trai
 
 
 def _prepare_feature_matrix(events_df: pd.DataFrame) -> tuple[pd.DataFrame, np.ndarray, list[str]]:
-    # Provide movement_variability if not present (alias speed_std)
-    if "movement_variability" not in events_df.columns and "speed_std" in events_df.columns:
-        events_df = events_df.copy()
-        events_df["movement_variability"] = events_df["speed_std"]
 
     numeric_cols = [c for c in [
         "drop_gal", "min_step_gal", "p95_abs_dfuel", "n_negative_steps",
@@ -427,6 +423,15 @@ def main() -> int:
                 cfg,
                 paths,
             )
+
+        # Save enriched events with all features
+        log_section("SAVING ENRICHED EVENTS")
+
+        enriched_path = Path('data/events/events_with_features.csv')
+        enriched_path.parent.mkdir(parents=True, exist_ok=True)
+        events_enriched.to_csv(enriched_path, index=False)
+
+        logger.info(f"✓ Saved events with {len(events_enriched.columns)} features")
 
         # Summary
         log_section("TRAINING SUMMARY")

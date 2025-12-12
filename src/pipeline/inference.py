@@ -11,16 +11,17 @@ from datetime import datetime
 
 import numpy as np
 import pandas as pd
-import joblib
 
-from src.config.settings import Config
 from src.config.loader import load_config
 from src.detection.stationary import segment_stationary_periods
 from src.detection.events import detect_events
 from src.detection.nms import nms_events_dataframe, remove_exact_duplicates
 from src.features.temporal import add_all_temporal_features
-from src.utils.io import load_json, load_pickle
-from src.utils.timezone import ensure_series_utc
+from src.data.preprocessor import DataPreprocessor
+from src.features.engineering import FeatureEngineer
+from src.config.settings import FeatureConfig
+from src.data.loader import standardize_columns, validate_required_columns
+from src.utils.io import load_json, load_model
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +35,7 @@ class InferencePipeline:
     
     Example:
         >>> pipeline = InferencePipeline(
-        ...     model_path="data/models/rf_cal.pkl",
+        ...     model_path="data/models/random_forest_calibrated.pkl",
         ...     config_path="config",
         ... )
         >>> results = pipeline.predict(new_telemetry_df)
@@ -60,18 +61,26 @@ class InferencePipeline:
         
         # Load configuration
         if Path(config_path).is_dir():
-            self.config = load_config(
+            full_config = load_config(
                 detection_config_path=Path(config_path) / "detection_config.yaml",
                 model_config_path=Path(config_path) / "model_config.yaml",
                 path_config_path=Path(config_path) / "paths_config.yaml",
             )
+            self.config = full_config.detection
+            self.paths = full_config.paths
+            self.model_config = getattr(full_config, "model", None)
         else:
             # Assume single config file
             from src.config.loader import load_detection_config
             self.config = load_detection_config(Path(config_path))
+            self.paths = None
+            self.model_config = None
         
-        # Load model
-        self.model = load_pickle(Path(model_path))
+        # Preprocessor aligns with training pipeline
+        self.preprocessor = DataPreprocessor(self.config)
+        
+        # Load model (prefer joblib for sklearn pipelines)
+        self.model = load_model(Path(model_path))
         logger.info(f"Loaded model from {model_path}")
         
         # Load thresholds (optional)
@@ -97,6 +106,7 @@ class InferencePipeline:
         telemetry_df: pd.DataFrame,
         return_raw_events: bool = False,
         confidence_threshold: float = 0.5,
+        source_name: Optional[str] = None,
     ) -> pd.DataFrame:
         """
         Process telemetry data and predict fuel theft events.
@@ -118,7 +128,7 @@ class InferencePipeline:
         logger.info(f"Processing {len(telemetry_df):,} telemetry rows")
         
         # 1. Preprocess telemetry
-        telemetry_df = self._preprocess_telemetry(telemetry_df)
+        telemetry_df = self._preprocess_telemetry(telemetry_df, source_name=source_name)
         
         # 2. Detect candidate events
         events_df = self._detect_events(telemetry_df)
@@ -201,6 +211,7 @@ class InferencePipeline:
         self,
         telemetry_batch: pd.DataFrame,
         batch_id: Optional[str] = None,
+        source_name: Optional[str] = None,
     ) -> Dict:
         """
         Process a batch of streaming telemetry data.
@@ -224,7 +235,11 @@ class InferencePipeline:
         
         logger.info(f"Processing stream batch: {batch_id}")
         
-        events_df = self.predict(telemetry_batch, return_raw_events=False)
+        events_df = self.predict(
+            telemetry_batch,
+            return_raw_events=False,
+            source_name=source_name or batch_id
+        )
         
         result = {
             'events': events_df,
@@ -240,38 +255,46 @@ class InferencePipeline:
     
     # ========== Internal Methods ==========
     
-    def _preprocess_telemetry(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Preprocess telemetry data."""
+    def _standardize_telemetry(
+        self,
+        df: pd.DataFrame,
+        source_name: Optional[str] = None
+    ) -> pd.DataFrame:
+        """
+        Standardize raw telemetry columns to canonical names expected by preprocessing.
         
-        df = df.copy()
+        Uses the same flexible column mapping as the combination pipeline
+        (handles Spanish/English headers, speed units, ignition booleans, etc.).
+        """
+        required = {"vehicle_id", "timestamp", "total_fuel_gal", "speed_kmh", "ignition"}
         
-        # Ensure UTC timestamps
-        df['timestamp'] = ensure_series_utc(df['timestamp'])
+        # If already standardized, return as-is
+        if required.issubset(set(df.columns)):
+            return df
         
-        # Sort by vehicle and time
-        df = df.sort_values(['vehicle_id', 'timestamp']).reset_index(drop=True)
+        mapping = getattr(self, "paths", None).column_mapping if getattr(self, "paths", None) else None
+        logger.info("Standardizing telemetry columns for inference...")
+        standardized = standardize_columns(
+            df.copy(),
+            column_mapping=mapping,
+            source_filename=source_name
+        )
+        validate_required_columns(standardized, required=list(required))
+        return standardized
+    
+    def _preprocess_telemetry(
+        self,
+        df: pd.DataFrame,
+        source_name: Optional[str] = None
+    ) -> pd.DataFrame:
+        """Preprocess telemetry data using same pipeline as training."""
         
-        # Calculate derived columns (if not present)
-        if 'dt_s' not in df.columns:
-            df['dt_s'] = df.groupby('vehicle_id')['timestamp'].diff().dt.total_seconds()
+        standardized = self._standardize_telemetry(df, source_name=source_name)
         
-        if 'dfuel' not in df.columns:
-            df['dfuel'] = df.groupby('vehicle_id')['total_fuel_gal'].diff()
-        
-        if 'moving' not in df.columns:
-            speed_threshold = self.config.stationary.speed_threshold_kmh
-            df['moving'] = df['speed_kmh'].fillna(np.inf) > speed_threshold
-        
-        if 'stationary_on' not in df.columns:
-            df['stationary_on'] = (~df['moving']) & (df['ignition'] == True)
-        
-        if 'ign_off' not in df.columns:
-            df['ign_off'] = (df['ignition'] == False)
-        
-        if 'stationary' not in df.columns:
-            df['stationary'] = df['stationary_on'] | df['ign_off']
-        
-        return df
+        # Reuse training preprocessor for consistency (normalize timestamps,
+        # derive movement/fuel deltas, remove outliers, interpolate gaps, etc.)
+        processed = self.preprocessor.fit_transform(standardized)
+        return processed
     
     def _detect_events(self, df: pd.DataFrame) -> pd.DataFrame:
         """Detect candidate fuel theft events."""
@@ -310,29 +333,46 @@ class InferencePipeline:
     ) -> pd.DataFrame:
         """Engineer features for prediction."""
         
-        # Add temporal features
-        events_df = add_all_temporal_features(events_df)
+        # Use same feature engineering stack as training
+        fe_cfg = FeatureConfig(
+            behavioral_lookback_hours=getattr(getattr(self.model_config, "features", None), "behavioral_lookback_hours", 2),
+            enable_vehicle_normalization=getattr(getattr(self.model_config, "features", None), "enable_vehicle_normalization", True),
+            enable_behavioral_features=getattr(getattr(self.model_config, "features", None), "enable_behavioral_features", True),
+            enable_temporal_features=getattr(getattr(self.model_config, "features", None), "enable_temporal_features", True),
+            enable_spatial_features=getattr(getattr(self.model_config, "features", None), "enable_spatial_features", True),
+        )
         
-        # Add basic event features (if not present)
-        if 'rate_gpm' not in events_df.columns:
-            events_df['rate_gpm'] = events_df['drop_gal'] / (events_df['duration_min'] + 1e-6)
+        fe = FeatureEngineer(fe_cfg)
+        engineered = fe.fit_transform(events_df, raw_df=telemetry_df)
         
-        # Note: Full feature engineering (behavioral, spatial) requires
-        # access to historical data per vehicle. For production, these
-        # should be precomputed or use windowed aggregates.
+        # Guarantee rate_gpm exists (defensive)
+        if 'rate_gpm' not in engineered.columns and 'drop_gal' in engineered.columns and 'duration_min' in engineered.columns:
+            engineered['rate_gpm'] = engineered['drop_gal'] / (engineered['duration_min'] + 1e-6)
         
-        return events_df
+        return engineered
     
     def _predict_probabilities(self, events_df: pd.DataFrame) -> np.ndarray:
         """Predict theft probabilities."""
         
         required_features = self._get_required_features()
         
+        # Ensure all required features exist; fill missing with zeros
+        missing = [f for f in required_features if f not in events_df.columns]
+        if missing:
+            logger.warning(f"Missing features in events_df; filling with zeros: {missing}")
+            for feat in missing:
+                events_df[feat] = 0.0
+        
         # Prepare feature matrix
         X = events_df[required_features].copy()
         
-        # Fill missing features
-        X = X.fillna(0.0)
+        # Impute: numeric -> 0, categorical -> "unknown"
+        num_cols = X.select_dtypes(include=[np.number]).columns
+        cat_cols = [c for c in X.columns if c not in num_cols]
+        if len(num_cols):
+            X[num_cols] = X[num_cols].fillna(0.0)
+        if len(cat_cols):
+            X[cat_cols] = X[cat_cols].fillna("unknown")
         
         # Predict
         probabilities = self.model.predict_proba(X)[:, 1]
@@ -344,21 +384,22 @@ class InferencePipeline:
         
         # Standard feature set (matches training)
         features = [
-            "drop_gal", "min_step_gal", "duration_min", "rate_gpm",
-            "n_negative_steps", "pct_ign_on", "hod_sin", "hod_cos",
-        ]
-        
-        # Add optional features if available
-        optional_features = [
-            "is_hotspot", "is_weekend", "is_night",
-            "cluster_count", "n_points", "p95_abs_dfuel",
+            "drop_gal", "min_step_gal", "p95_abs_dfuel", "n_negative_steps",
+            "duration_min", "cluster_count", "n_points", "pct_ign_on", "rate_gpm",
+            "hod_sin", "hod_cos",
             "drop_gal_vehicle_zscore", "rate_gpm_vehicle_zscore",
+            "min_step_gal_vehicle_zscore", "duration_min_vehicle_zscore",
+            "drop_pct_of_avg", "drop_pct_of_max",
             "pre_event_distance_km", "pre_event_avg_speed",
-            "speed_std", "lat_std", "lon_std",
+            "pre_event_moving_pct", "pre_event_fuel_change",
+            "speed_std", "speed_max", "movement_variability",
+            "lat_std", "lon_std", "coord_range_km",
+            "window_trip_km",
+            "is_hotspot", "is_weekend", "is_night",
+            "pattern",
         ]
         
-        # Only include features model was trained on
-        # (In production, this should be stored with the model)
+        # Prefer model-declared feature names if available
         try:
             if hasattr(self.model, 'feature_names_in_'):
                 return list(self.model.feature_names_in_)

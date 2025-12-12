@@ -34,6 +34,23 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def read_telemetry_csv(file_path: Path) -> pd.DataFrame:
+    """
+    Load telemetry CSV while tolerating malformed rows.
+    
+    Uses the python engine so that on_bad_lines works consistently.
+    """
+    try:
+        return pd.read_csv(
+            file_path,
+            engine="python",
+            on_bad_lines="warn",  # skip and log malformed lines instead of failing
+        )
+    except Exception:
+        logger.exception(f"Failed to read telemetry file: {file_path}")
+        raise
+
+
 def parse_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
@@ -42,7 +59,7 @@ def parse_args():
         epilog="""
 Examples:
   # Single file
-  python scripts/05_run_inference.py --input data/new_data.csv
+  python scripts/05_run_inference.py --input data/new_raw/WOL991_2025_Jun.csv
   
   # Multiple files
   python scripts/05_run_inference.py --input data/raw/*.csv --batch
@@ -63,8 +80,8 @@ Examples:
     parser.add_argument(
         '--model',
         type=Path,
-        default=Path('data/models/rf_cal.pkl'),
-        help='Path to trained model (default: data/models/rf_cal.pkl)',
+        default=Path('data/models/random_forest_calibrated.pkl'),
+        help='Path to trained model (default: data/models/random_forest_calibrated.pkl)',
     )
     
     parser.add_argument(
@@ -213,11 +230,12 @@ def main():
             for file_path in input_files:
                 logger.info(f"\nProcessing stream batch: {file_path.name}")
                 
-                telemetry_df = pd.read_csv(file_path)
+                telemetry_df = read_telemetry_csv(file_path)
                 
                 result = pipeline.process_stream(
                     telemetry_batch=telemetry_df,
                     batch_id=file_path.stem,
+                    source_name=file_path.name,
                 )
                 
                 logger.info(f"Batch {result['batch_id']}: {result['n_thefts']} thefts in {result['n_events']} events")
@@ -236,7 +254,7 @@ def main():
             logger.info(f"Processing: {file_path}")
             
             # Load telemetry
-            telemetry_df = pd.read_csv(file_path)
+            telemetry_df = read_telemetry_csv(file_path)
             logger.info(f"Loaded {len(telemetry_df):,} telemetry rows")
             
             # Run inference
@@ -244,6 +262,7 @@ def main():
                 telemetry_df=telemetry_df,
                 return_raw_events=args.return_raw,
                 confidence_threshold=args.threshold,
+                source_name=file_path.name,
             )
             
             if predictions.empty:

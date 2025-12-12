@@ -72,14 +72,28 @@ def add_movement_variability(events_df: pd.DataFrame, raw_df: pd.DataFrame) -> p
         )
         e = raw_df.loc[m]
         if e.empty:
-            return pd.Series({"speed_std": 0.0, "speed_max": 0.0})
+            return pd.Series({
+                "speed_std": 0.0, 
+                "speed_max": 0.0,
+                "movement_variability": 0.0  # Add this line
+            })
         sp = e["speed_kmh"].dropna()
-        return pd.Series(
-            {
-                "speed_std": float(sp.std()) if len(sp) > 1 else 0.0,
+        if len(sp) < 2:
+            return pd.Series({
+                "speed_std": 0.0, 
                 "speed_max": float(sp.max()) if len(sp) else 0.0,
-            }
-        )
+                "movement_variability": 0.0  # Add this line
+            })
+        
+        speed_std = float(sp.std())
+        speed_max = float(sp.max())
+        movement_var = float(sp.var())  # This is movement_variability
+        
+        return pd.Series({
+            "speed_std": speed_std,
+            "speed_max": speed_max, 
+            "movement_variability": movement_var  # Add this line
+        })
 
     mv = df.apply(_mv, axis=1)
     return pd.concat([df, mv], axis=1)

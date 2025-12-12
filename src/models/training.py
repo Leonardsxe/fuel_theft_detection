@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import inspect
 from typing import Dict, List, Optional, Any
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -99,8 +100,8 @@ def build_preprocessing_pipeline(
         transformers.append((
             "num",
             Pipeline(steps=[
-                ("imputer", SimpleImputer(strategy="median")),
-                ("scaler", StandardScaler(with_mean=False)),
+            ("imputer", SimpleImputer(strategy="median")),
+            ("scaler", StandardScaler(with_mean=False)),
             ]),
             numeric_cols,
         ))
@@ -207,6 +208,56 @@ def _dedupe_columns(X: pd.DataFrame) -> pd.DataFrame:
     return X
 
 
+def _save_rf_feature_importances(
+    preprocess: ColumnTransformer,
+    calibrated_rf: CalibratedClassifierCV,
+    output_path: Optional[Path] = None,
+) -> None:
+    """
+    Persist RandomForest feature importances without disrupting the training flow.
+    
+    Works with CalibratedClassifierCV by unwrapping the trained base estimator
+    after calibration. Safe to call even if importances are unavailable.
+    """
+    try:
+        # CalibratedClassifierCV trains one calibrated model per CV fold
+        base_rf = None
+        if hasattr(calibrated_rf, "calibrated_classifiers_") and calibrated_rf.calibrated_classifiers_:
+            for cal in calibrated_rf.calibrated_classifiers_:
+                est = getattr(cal, "base_estimator", None)
+                if est is not None and hasattr(est, "feature_importances_"):
+                    base_rf = est
+                    break
+        if base_rf is None and hasattr(calibrated_rf, "base_estimator"):
+            est = getattr(calibrated_rf, "base_estimator")
+            if hasattr(est, "feature_importances_"):
+                base_rf = est
+        if base_rf is None and hasattr(calibrated_rf, "feature_importances_"):
+            base_rf = calibrated_rf  # edge case: no calibration wrap
+        
+        if base_rf is None or not hasattr(base_rf, "feature_importances_"):
+            logger.info("RandomForest feature importances unavailable; skipping save.")
+            return
+        
+        importances = base_rf.feature_importances_
+        if hasattr(preprocess, "get_feature_names_out"):
+            feature_names = preprocess.get_feature_names_out()
+        else:
+            feature_names = np.array([f"feature_{i}" for i in range(len(importances))])
+        
+        fi_df = pd.DataFrame({
+            "feature": feature_names,
+            "importance": importances
+        }).sort_values("importance", ascending=False)
+        
+        path = output_path or Path("data/reports/feature_importances/random_forest.csv")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fi_df.to_csv(path, index=False)
+        logger.info(f"Saved RandomForest feature importances → {path}")
+    except Exception as exc:
+        logger.warning(f"Could not save RandomForest feature importances: {exc}")
+
+
 # ========================================
 # Model Training Functions
 # ========================================
@@ -255,7 +306,8 @@ def train_random_forest(
     preprocess: ColumnTransformer,
     X: pd.DataFrame,
     y: np.ndarray,
-    config: ModelConfig
+    config: ModelConfig,
+    feature_importance_path: Optional[Path] = None,
 ) -> Pipeline:
     """
     Train calibrated Random Forest classifier.
@@ -265,6 +317,7 @@ def train_random_forest(
         X: Features
         y: Labels
         config: Model configuration
+        feature_importance_path: Optional path to save feature importances
     
     Returns:
         Trained pipeline with calibration
@@ -280,8 +333,7 @@ def train_random_forest(
         random_state=rf_cfg.random_state,
         n_jobs=rf_cfg.n_jobs,
     )
-    
-    # Calibrate probabilities
+
     rf_calibrated = CalibratedClassifierCV(
         rf,
         method=rf_cfg.calibration_method,
@@ -294,6 +346,9 @@ def train_random_forest(
     ])
     
     pipe.fit(X, y)
+    
+    # Persist feature importances safely (post-calibration)
+    _save_rf_feature_importances(preprocess, rf_calibrated, feature_importance_path)
     logger.info("✓ Trained Random Forest (calibrated)")
     
     return pipe
@@ -639,7 +694,7 @@ class ModelTrainer:
         # Random Forest (calibrated)
         try:
             self.models["rf_cal"] = train_random_forest(
-                self.preprocessor, X_train, y_train, self.config
+                self.preprocessor, X_train, y_train, self.config, feature_importance_path=Path("data/reports/features_importance/rf.csv")
             )
         except Exception as e:
             logger.error(f"Failed to train Random Forest: {e}")
