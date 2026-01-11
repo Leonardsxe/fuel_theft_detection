@@ -1,0 +1,26 @@
+{
+  "pattern_distribution": {
+    "short_4_10m_3gal": 1049,
+    "extended_15m_6gal": 197,
+    "postjourney_off": 59
+  },
+  "theft_rate_by_pattern": {
+    "Confirmed Thefts": {
+      "extended_15m_6gal": 15,
+      "postjourney_off": 31,
+      "short_4_10m_3gal": 54
+    },
+    "Total Events": {
+      "extended_15m_6gal": 197,
+      "postjourney_off": 59,
+      "short_4_10m_3gal": 1049
+    },
+    "Theft Rate": {
+      "extended_15m_6gal": 0.076,
+      "postjourney_off": 0.525,
+      "short_4_10m_3gal": 0.051
+    }
+  },
+  "hotspot_count": 689,
+  "total_fuel_loss_gal": 5612.48
+}

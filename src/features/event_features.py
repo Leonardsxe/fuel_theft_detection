@@ -56,6 +56,11 @@ def add_event_statistics(events_df: pd.DataFrame, raw_df: pd.DataFrame) -> pd.Da
         })
     
     stats = events_df.apply(extract_stats, axis=1)
-    events_df = pd.concat([events_df, stats], axis=1)
-    
+
+    # If the detector already provided n_negative_steps, keep it and drop the recomputed one.
+    if "n_negative_steps" in events_df.columns and "n_negative_steps" in stats.columns:
+        stats = stats.drop(columns=["n_negative_steps"])
+
+    # Assign (overwrites shared names you *want* to overwrite; avoids duplicate columns)
+    events_df[stats.columns] = stats.values
     return events_df

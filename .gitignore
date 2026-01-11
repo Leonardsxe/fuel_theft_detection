@@ -21,6 +21,7 @@ share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+tests/unit/d_d_g.py
 MANIFEST
 
 # Virtual environments

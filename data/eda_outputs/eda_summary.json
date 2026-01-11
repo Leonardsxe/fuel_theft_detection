@@ -1,0 +1,26 @@
+{
+  "dataset_info": {
+    "total_rows": 733022,
+    "num_vehicles": 4,
+    "date_range_start": "2024-11-01 00:43:54+00:00",
+    "date_range_end": "2025-04-28 18:40:13+00:00",
+    "duration_days": 178
+  },
+  "fuel_statistics": {
+    "mean_fuel_level": 137.779059131425,
+    "std_fuel_level": 51.84381987560261,
+    "min_fuel_level": 14.37,
+    "max_fuel_level": 255.1,
+    "large_drops_count": 25
+  },
+  "movement_statistics": {
+    "stationary_pct": 5.855622341484976,
+    "mean_speed": 55.86834637978124,
+    "max_speed": 121.0
+  },
+  "data_quality": {
+    "completeness_pct": 98.08534370703038,
+    "valid_coords_pct": 99.9982265198043,
+    "duplicates_count": 0
+  }
+}

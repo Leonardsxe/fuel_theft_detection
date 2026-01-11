@@ -10,8 +10,6 @@ Comprehensive evaluation of trained models with:
 - Top predictions for review
 - Calibration quality assessment
 
-Usage:
-    python scripts/04_evaluate_models.py
 """
 
 import sys
@@ -39,11 +37,11 @@ def load_trained_models(models_dir: Path) -> dict:
     
     models = {}
     model_files = {
-        'logreg_cal': 'logreg_cal.pkl',
-        'rf_cal': 'rf_cal.pkl',
-        'xgb': 'xgb.pkl',
-        'lgbm': 'lgbm.pkl',
-        'iso_forest': 'iso_forest.pkl',
+        'logreg_cal': 'logistic_regression_calibrated.pkl',
+        'rf_cal': 'random_forest_calibrated.pkl',
+        'xgb': 'xgboost_extended_pattern.pkl',
+        'lgbm': 'lightgbm_tuned.pkl',
+        'iso_forest': 'isolation_forest.pkl',
     }
     
     for name, filename in model_files.items():
@@ -51,7 +49,7 @@ def load_trained_models(models_dir: Path) -> dict:
         if path.exists():
             try:
                 models[name] = joblib.load(path)
-                logger.info(f"✓ Loaded {name} from {path}")
+                logger.info(f"Loaded {name} from {path}")
             except Exception as e:
                 logger.warning(f"Failed to load {name}: {e}")
         else:
@@ -411,7 +409,7 @@ def main() -> int:
         # Load test data
         log_section("LOADING TEST DATA")
         events_df, raw_df, raw_train_mask = load_test_data(
-            config.paths.output.events_csv,
+            config.paths.output.events_with_features,
             config.paths.input.combined_csv,
             train_ratio=config.model.splitting.train_ratio,
         )
